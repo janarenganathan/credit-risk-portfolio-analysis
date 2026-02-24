@@ -1,0 +1,228 @@
+CREATE SCHEMA IF NOT EXISTS `yourproject-1234.credit_risk_project`;
+CREATE OR REPLACE TABLE `yourproject-1234.credit_risk_project.loans_raw` AS
+WITH base AS (
+  SELECT
+    GENERATE_UUID() AS customer_id,
+
+    -- Age (some NULLs)
+    IF(RAND() < 0.02, NULL, CAST(18 + RAND()*55 AS INT64)) AS age,
+
+    -- Income (realistic distribution + some NULLs)
+    IF(RAND() < 0.03, NULL, ROUND(25000 + RAND()*175000, 2)) AS income,
+
+    -- Credit score (some NULLs)
+    IF(RAND() < 0.04, NULL, CAST(300 + RAND()*550 AS INT64)) AS credit_score,
+
+    -- Loan amount with some extreme outliers
+    IF(RAND() < 0.02, 
+        ROUND((5000 + RAND()*95000) * 5, 2), 
+        ROUND(5000 + RAND()*95000, 2)
+    ) AS loan_amount,
+
+    -- Loan purpose with messy casing & spacing
+    CASE 
+      WHEN RAND() < 0.25 THEN 'personal'
+      WHEN RAND() < 0.50 THEN 'Home '
+      WHEN RAND() < 0.75 THEN 'CAR'
+      ELSE 'business'
+    END AS loan_purpose,
+
+    CAST(12 + RAND()*48 AS INT64) AS loan_term_months
+
+  FROM UNNEST(GENERATE_ARRAY(1, 75000)) AS x
+),
+
+final AS (
+  SELECT *,
+  
+    -- Realistic default probability logic
+    CASE 
+      WHEN credit_score IS NULL THEN IF(RAND() < 0.25, 1, 0)
+      WHEN credit_score < 580 AND income < 40000 THEN IF(RAND() < 0.45, 1, 0)
+      WHEN credit_score < 650 THEN IF(RAND() < 0.25, 1, 0)
+      WHEN credit_score < 720 THEN IF(RAND() < 0.12, 1, 0)
+      ELSE IF(RAND() < 0.05, 1, 0)
+    END AS default_status
+
+  FROM base
+)
+
+SELECT * FROM final;
+
+SELECT COUNT(*) 
+FROM `yourproject-1234.credit_risk_project.loans_raw`;
+
+SELECT
+  COUNTIF(age IS NULL) AS missing_age,
+  COUNTIF(income IS NULL) AS missing_income,
+  COUNTIF(credit_score IS NULL) AS missing_credit_score
+FROM `yourproject-1234.credit_risk_project.loans_raw`;
+
+SELECT
+  COUNTIF(age IS NULL) AS missing_age,
+  COUNTIF(income IS NULL) AS missing_income,
+  COUNTIF(credit_score IS NULL) AS missing_credit_score
+FROM `yourproject-1234.credit_risk_project.loans_raw`;
+
+SELECT DISTINCT loan_purpose
+FROM `yourproject-1234.credit_risk_project.loans_raw`;
+
+CREATE OR REPLACE TABLE `yourproject-1234.credit_risk_project.loans_scored` AS
+SELECT *,
+  
+  -- Normalize credit score (lower score = higher risk)
+  (850 - credit_score) / 550 AS credit_risk_factor,
+
+  -- Loan burden factor
+  loan_income_ratio AS income_risk_factor,
+
+  -- Combined weighted risk score
+  ROUND(
+    ((850 - credit_score) / 550) * 0.6 +
+    loan_income_ratio * 0.4
+  , 2) AS composite_risk_score
+
+FROM `yourproject-1234.credit_risk_project.loans_featured`;
+
+SELECT table_name
+FROM `yourproject-1234.credit_risk_project.INFORMATION_SCHEMA.TABLES`;
+
+CREATE OR REPLACE TABLE `yourproject-1234.credit_risk_project.loans_cleaned` AS
+SELECT
+  customer_id,
+  COALESCE(age, 35) AS age,
+  COALESCE(income, 50000) AS income,
+  COALESCE(credit_score, 650) AS credit_score,
+  loan_amount,
+  TRIM(UPPER(loan_purpose)) AS loan_purpose,
+  loan_term_months,
+  default_status
+FROM `yourproject-1234.credit_risk_project.loans_raw`
+WHERE loan_amount < 200000;
+
+CREATE OR REPLACE TABLE `yourproject-1234.credit_risk_project.loans_featured` AS
+SELECT *,
+  ROUND(loan_amount / income, 2) AS loan_income_ratio
+FROM `yourproject-1234.credit_risk_project.loans_cleaned`;
+
+SELECT COUNT(*)
+FROM `yourproject-1234.credit_risk_project.loans_featured`;
+
+CREATE OR REPLACE TABLE `yourproject-1234.credit_risk_project.loans_scored` AS
+SELECT *,
+  
+  -- Credit risk factor (normalized)
+  (850 - credit_score) / 550 AS credit_risk_factor,
+
+  -- Loan burden factor
+  loan_income_ratio AS income_risk_factor,
+
+  -- Composite weighted score
+  ROUND(
+    ((850 - credit_score) / 550) * 0.6 +
+    loan_income_ratio * 0.4
+  , 3) AS composite_risk_score
+
+FROM `yourproject-1234.credit_risk_project.loans_featured`;
+
+SELECT
+  MIN(composite_risk_score) AS min_score,
+  MAX(composite_risk_score) AS max_score,
+  ROUND(AVG(composite_risk_score),3) AS avg_score
+FROM `yourproject-1234.credit_risk_project.loans_scored`;
+
+SELECT
+  CASE
+    WHEN composite_risk_score > 1.2 THEN 'Very High Risk'
+    WHEN composite_risk_score > 0.9 THEN 'High Risk'
+    WHEN composite_risk_score > 0.6 THEN 'Moderate Risk'
+    ELSE 'Low Risk'
+  END AS risk_segment,
+  COUNT(*) AS total_loans,
+  COUNTIF(default_status = 1) AS defaults,
+  ROUND(COUNTIF(default_status = 1) * 100.0 / COUNT(*),2) AS default_rate
+FROM `yourproject-1234.credit_risk_project.loans_scored`
+GROUP BY risk_segment
+ORDER BY default_rate DESC;
+
+SELECT
+  risk_segment,
+  SUM(loan_amount) AS total_exposure,
+  SUM(CASE WHEN default_status = 1 THEN loan_amount ELSE 0 END) AS defaulted_exposure
+FROM (
+  SELECT *,
+    CASE
+      WHEN composite_risk_score > 1.2 THEN 'Very High Risk'
+      WHEN composite_risk_score > 0.9 THEN 'High Risk'
+      WHEN composite_risk_score > 0.6 THEN 'Moderate Risk'
+      ELSE 'Low Risk'
+    END AS risk_segment
+  FROM `yourproject-1234.credit_risk_project.loans_scored`
+)
+GROUP BY risk_segment
+ORDER BY total_exposure DESC;
+
+WITH segmented AS (
+  SELECT *,
+    CASE
+      WHEN composite_risk_score > 1.2 THEN 'Very High Risk'
+      WHEN composite_risk_score > 0.9 THEN 'High Risk'
+      WHEN composite_risk_score > 0.6 THEN 'Moderate Risk'
+      ELSE 'Low Risk'
+    END AS risk_segment
+  FROM `yourproject-1234.credit_risk_project.loans_scored`
+)
+
+SELECT
+  COUNT(*) AS total_loans,
+  COUNTIF(risk_segment != 'Very High Risk') AS approved_loans,
+  COUNTIF(risk_segment = 'Very High Risk') AS rejected_loans,
+  ROUND(COUNTIF(risk_segment != 'Very High Risk')*100.0/COUNT(*),2) AS approval_rate_percent
+FROM segmented;
+
+WITH segmented AS (
+  SELECT *,
+    CASE
+      WHEN composite_risk_score > 1.2 THEN 'Very High Risk'
+      WHEN composite_risk_score > 0.9 THEN 'High Risk'
+      WHEN composite_risk_score > 0.6 THEN 'Moderate Risk'
+      ELSE 'Low Risk'
+    END AS risk_segment
+  FROM `yourproject-1234.credit_risk_project.loans_scored`
+)
+
+SELECT
+  SUM(loan_amount) AS total_exposure,
+  SUM(CASE WHEN default_status = 1 THEN loan_amount ELSE 0 END) AS original_default_exposure,
+
+  SUM(CASE 
+        WHEN risk_segment != 'Very High Risk' AND default_status = 1 
+        THEN loan_amount 
+        ELSE 0 
+      END) AS default_exposure_after_strategy
+
+FROM segmented;
+
+CREATE OR REPLACE TABLE `yourproject-1234.credit_risk_project.final_portfolio_summary` AS
+WITH segmented AS (
+  SELECT *,
+    CASE
+      WHEN composite_risk_score > 1.2 THEN 'Very High Risk'
+      WHEN composite_risk_score > 0.9 THEN 'High Risk'
+      WHEN composite_risk_score > 0.6 THEN 'Moderate Risk'
+      ELSE 'Low Risk'
+    END AS risk_segment
+  FROM `yourproject-1234.credit_risk_project.loans_scored`
+)
+
+SELECT
+  risk_segment,
+  COUNT(*) AS total_loans,
+  SUM(loan_amount) AS total_exposure,
+  COUNTIF(default_status = 1) AS total_defaults,
+  SUM(CASE WHEN default_status = 1 THEN loan_amount ELSE 0 END) AS default_exposure,
+  ROUND(COUNTIF(default_status=1)*100.0/COUNT(*),2) AS default_rate,
+  ROUND(AVG(composite_risk_score),3) AS avg_risk_score
+FROM segmented
+GROUP BY risk_segment;
+
