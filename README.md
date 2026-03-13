@@ -27,4 +27,4 @@ A financial institution aims to reduce loan default exposure while maintaining p
 - Risk-based pricing recommended for High Risk segment
 
 ## 📊 Dashboard Preview
-![Dashboard Screenshot]<img width="1180" height="664" alt="Screenshot 2026-02-24 163137" src="https://github.com/user-attachments/assets/caddddf6-057a-4099-8286-526948ff58cc" />
+<img width="1180" height="664" alt="Screenshot 2026-02-24 163137" src="https://github.com/user-attachments/assets/caddddf6-057a-4099-8286-526948ff58cc" />
